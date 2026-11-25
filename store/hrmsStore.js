@@ -25,6 +25,7 @@ const defaultSalary = (monthlySalary) => ({
 const seedCompanies = [
   { id: 'c1', name: 'Attan Technologies', address: 'Bengaluru, Karnataka', email: 'hr@attan.co', phone: '+91 98765 43210', registration: 'ATT-2024-001', color: '#4F46E5', holidays: [], salaryPolicy: { payWeeklyOff: true, payPublicHoliday: true } },
   { id: 'c2', name: 'Attan Retail', address: 'Mumbai, Maharashtra', email: 'hello@attanretail.com', phone: '+91 91234 56780', registration: 'ATR-2024-018', color: '#0EA5E9', holidays: [], salaryPolicy: { payWeeklyOff: true, payPublicHoliday: true } },
+  { id: 'c3', name: 'Aptara', address: '', email: '', phone: '', registration: '', color: '#4361EE', holidays: [], salaryPolicy: { payWeeklyOff: true, payPublicHoliday: true } },
 ];
 
 const seedEmployees = [
@@ -32,6 +33,7 @@ const seedEmployees = [
   { id: 'e2', companyId: 'c1', name: 'Diya Patel', code: 'EMP-002', email: 'diya@attan.co', phone: '+91 99888 22222', designation: 'HR Manager', department: 'Human Resources', joiningDate: '2024-03-01', status: 'active', shiftStart: '09:00', shiftEnd: '17:30', requiredHours: 8, weeklyOffs: [0], photo: '', role: 'employee', salary: { ...defaultSalary(72000), overtimeRate: 180 } },
   { id: 'e3', companyId: 'c1', name: 'Kabir Singh', code: 'EMP-003', email: 'kabir@attan.co', phone: '+91 99888 33333', designation: 'UI/UX Designer', department: 'Design', joiningDate: '2024-05-20', status: 'active', shiftStart: '10:00', shiftEnd: '18:00', requiredHours: 8, weeklyOffs: [0], photo: '', role: 'employee', salary: { ...defaultSalary(68000), overtimeRate: 160 } },
   { id: 'e4', companyId: 'c2', name: 'Meera Nair', code: 'EMP-101', email: 'meera@attanretail.com', phone: '+91 99888 44444', designation: 'Store Lead', department: 'Operations', joiningDate: '2023-11-10', status: 'active', shiftStart: '09:30', shiftEnd: '18:30', requiredHours: 9, weeklyOffs: [0], photo: '', role: 'employee', salary: { ...defaultSalary(54000), overtimeRate: 120 } },
+  { id: 'e5', companyId: 'c3', name: 'Rahul Chauhan', code: 'MAS63478', email: '', phone: '', designation: '', department: 'Typesetting', joiningDate: '', status: 'active', shiftLabel: 'Day Shift', shiftStart: '', shiftEnd: '', requiredHours: 8, weeklyOffs: [0], photo: '', role: 'employee', salary: defaultSalary(0) },
 ];
 
 const validAttendanceStatuses = ['Present', 'Half Day', 'Absent', 'Paid Leave', 'Unpaid Leave', 'Weekly Off', 'Public Holiday'];
@@ -64,7 +66,7 @@ export const useHrmsStore = create(persist((set, get) => ({
   reminderTimes: ['18:00', '19:00', '20:00'],
   remindersEnabled: true,
   theme: 'light',
-  activeCompanyId: 'c1',
+  activeCompanyId: 'c3',
   setTheme: (theme) => set({ theme }),
   addCompany: (company) => set((state) => ({ companies: [...state.companies, company] })),
   updateCompany: (company) => set((state) => ({ companies: state.companies.map((item) => item.id === company.id ? company : item) })),
@@ -391,6 +393,10 @@ export const useHrmsStore = create(persist((set, get) => ({
   storage: createJSONStorage(() => hrmsStorage),
   merge: (persistedState, currentState) => {
     const saved = persistedState ?? {};
+    const companies = saved.companies ?? currentState.companies;
+    const employees = saved.employees ?? currentState.employees;
+    if (!companies.some((company) => company.id === 'c3')) companies.push(seedCompanies[2]);
+    if (!employees.some((employee) => employee.code === 'MAS63478')) employees.push(seedEmployees[4]);
     let salaryTransactions = saved.salaryTransactions;
     if (!salaryTransactions) {
       salaryTransactions = [];
@@ -436,6 +442,9 @@ export const useHrmsStore = create(persist((set, get) => ({
     return {
       ...currentState,
       ...saved,
+      companies,
+      employees,
+      activeCompanyId: saved.activeCompanyId ?? currentState.activeCompanyId,
       attendanceAdjustments: saved.attendanceAdjustments ?? [],
       attendanceHistory: saved.attendanceHistory ?? [],
       salaryTransactions,

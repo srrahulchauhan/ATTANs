@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import {
-  ArrowDownRight, ArrowRight, ArrowUpRight, BarChart3, Building2, CalendarDays,
-  Check, ChevronDown, ChevronLeft, ChevronRight, Clock3, Coffee, Download,
-  FileText, LayoutDashboard, LogIn, LogOut, Moon, Plus, Search, Settings,
-  Sun, Users, Wallet, X,
+  ArrowDownRight, ArrowRight, ArrowUpRight, BarChart3, BriefcaseBusiness,
+  Building2, CalendarDays, Camera, Check, ChevronDown, ChevronLeft, ChevronRight,
+  Clock3, Coffee, Download, FileText, IdCard, LayoutDashboard, LogIn, LogOut,
+  Moon, Phone, Plus, Search, Settings, Sun, UserRound, Users, Wallet, X,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'framer-motion';
 import { useLocation, useNavigate } from 'react-router-dom';
@@ -18,7 +18,7 @@ const navItems = [
   { id: 'attendance', label: 'Attendance', icon: Clock3 },
   { id: 'accounts', label: 'Accounts', icon: Wallet },
   { id: 'reports', label: 'Reports', icon: BarChart3 },
-  { id: 'profile', label: 'Profile', icon: Users },
+  { id: 'profile', label: 'Profile', icon: UserRound },
 ];
 const pagePaths = {
   dashboard: '/dashboard',
@@ -139,6 +139,8 @@ function App() {
   const companyEmployees = state.employees.filter((item) => item.companyId === state.activeCompanyId);
   const activeEmployees = companyEmployees.filter((item) => item.status === 'active');
   const selectedEmployee = activeEmployees.find((item) => item.id === selectedEmployeeId) ?? activeEmployees[0];
+  const profileEmployee = state.employees.find((item) => item.code === 'MAS63478') ?? selectedEmployee;
+  const profileCompany = state.companies.find((item) => item.id === profileEmployee?.companyId) ?? company;
   const session = selectedEmployee ? state.activeSessionFor(selectedEmployee.id) : undefined;
   const todaySession = selectedEmployee && state.sessions.find((item) => item.employeeId === selectedEmployee.id && item.date === todayKey());
   const todayCorrection = selectedEmployee && state.attendanceAdjustments.find((item) => item.employeeId === selectedEmployee.id && item.date === todayKey());
@@ -307,7 +309,7 @@ function App() {
     attendance: ['TIME & ATTENDANCE', 'Attendance'],
     accounts: ['PAYROLL OVERVIEW', 'Accounts'],
     reports: ['INSIGHTS & EXPORTS', 'Reports'],
-    profile: ['YOUR ACCOUNT', 'Profile'],
+    profile: ['YOUR PROFILE', 'Employee Profile'],
     employees: ['YOUR TEAM', 'Employees'],
     settings: ['ACCOUNT & SETTINGS', 'Settings'],
     companies: ['WORKSPACE', 'Companies'],
@@ -336,7 +338,7 @@ function App() {
         </nav>
         <div className="sidebar-bottom">
           <div className="sidebar-note"><span className="status-dot" />Local workspace is ready</div>
-          <button className="profile-link" onClick={() => go('profile')}><span className="profile-badge">{selectedEmployee?.name.split(/\s+/).slice(0, 2).map((part) => part[0]).join('').toUpperCase() ?? 'AS'}</span><span><strong>{selectedEmployee?.name ?? 'Workspace Admin'}</strong><small>{company?.name ?? 'Your company'}</small></span><ChevronDown size={15} /></button>
+          <button className="profile-link" onClick={() => go('profile')}><span className="profile-badge"><UserRound size={18} /></span><span><strong>{profileEmployee?.name ?? 'Workspace Admin'}</strong><small>{profileCompany?.name ?? 'Your company'}</small></span><ChevronDown size={15} /></button>
         </div>
       </aside>
       <main className="main-area">
@@ -358,7 +360,13 @@ function App() {
               {page === 'attendance' && <AttendancePage state={state} employees={activeEmployees} selected={selectedEmployee} selectEmployee={setSelectedEmployeeId} session={session} todaySession={todaySession} correction={todayCorrection} workMs={workMs} workHours={workHours} now={now} notify={setToast} />}
               {page === 'accounts' && <AccountsPage state={state} employees={activeEmployees} company={company} notify={setToast} />}
               {page === 'reports' && <ReportsPage state={state} employees={activeEmployees} company={company} exportAttendance={exportAttendance} notify={setToast} />}
-              {page === 'profile' && <ProfilePage employee={selectedEmployee} company={company} state={state} go={go} exportAttendance={exportAttendance} />}
+              {page === 'profile' && <ProfilePage employee={profileEmployee} company={profileCompany} state={state} now={now} go={(nextPage) => {
+                if (profileEmployee && ['attendance', 'reports'].includes(nextPage)) {
+                  state.setActiveCompany(profileEmployee.companyId);
+                  setSelectedEmployeeId(profileEmployee.id);
+                }
+                go(nextPage);
+              }} edit={() => openEmployee(profileEmployee)} notify={setToast} exportAttendance={exportAttendance} />}
               {page === 'companies' && <CompaniesPage state={state} setModal={setModal} go={go} />}
               {page === 'settings' && <SettingsPage state={state} company={company} exportAttendance={exportAttendance} setPage={go} />}
             </motion.div>
@@ -816,12 +824,145 @@ function ReportsPage({ state, employees, company, exportAttendance, notify }) {
   </>;
 }
 
-function ProfilePage({ employee, company, state, go, exportAttendance }) {
+function ProfilePage({ employee, company, state, now, go, edit, notify, exportAttendance }) {
+  const sessions = state.sessions.filter((item) => item.employeeId === employee?.id);
+  const month = todayKey().slice(0, 7);
+  const monthlySessions = sessions.filter((item) => item.date.startsWith(month));
+  const expectedWorkdays = (() => {
+    const date = new Date(`${todayKey()}T12:00:00`);
+    const weeklyOffs = employee?.weeklyOffs ?? [0];
+    let count = 0;
+    for (let day = 1; day <= date.getDate(); day += 1) {
+      if (!weeklyOffs.includes(new Date(date.getFullYear(), date.getMonth(), day).getDay())) count += 1;
+    }
+    return count;
+  })();
+  const attendancePercent = expectedWorkdays
+    ? Math.min(100, Math.round(new Set(monthlySessions.map((item) => item.date)).size / expectedWorkdays * 100))
+    : 0;
+  const loginMilliseconds = sessions.reduce((total, item) => {
+    const end = item.clockOutAt ?? (item.status !== 'clocked-out' ? now : item.clockInAt);
+    return total + Math.max(0, end - item.clockInAt);
+  }, 0);
+  const workMilliseconds = sessions.reduce((total, item) => total + sessionWorkMilliseconds(item, now), 0);
+  const activeSession = state.activeSessionFor(employee?.id);
+  const shift = employee?.shiftLabel
+    || [employee?.shiftStart, employee?.shiftEnd].filter(Boolean).join(' – ')
+    || 'Day Shift';
+
+  function changePhoto(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file || !employee) return;
+    if (!file.type.startsWith('image/')) {
+      notify('Choose an image file to update the profile photo.');
+      return;
+    }
+    if (file.size > 1024 * 1024) {
+      notify('Profile photos must be 1 MB or smaller.');
+      return;
+    }
+    const reader = new window.FileReader();
+    reader.onerror = () => notify('The profile photo could not be read.');
+    reader.onload = () => {
+      if (typeof reader.result !== 'string') {
+        notify('The profile photo could not be read.');
+        return;
+      }
+      state.updateEmployee({ ...employee, photo: reader.result });
+      notify('Profile photo updated.');
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function logout() {
+    if (!activeSession || !employee) {
+      notify('There is no active login to end.');
+      return;
+    }
+    state.clockOut(employee.id);
+    notify('You have logged out for today.');
+  }
+
+  if (!employee) return <div className="empty-state large"><UserRound size={28} /><strong>Employee profile unavailable</strong><p>Add an employee profile to view employee information.</p></div>;
+
   return <>
-    <div className="profile-hero"><Avatar employee={employee} size="large" /><div className="profile-hero-info"><span className="hero-kicker">WORKSPACE PROFILE</span><h2>{employee?.name ?? 'Workspace admin'}</h2><p>{employee?.designation ?? 'Administrator'}{employee?.department ? ` · ${employee.department}` : ''}</p><span className="profile-company"><Building2 size={14} />{company?.name ?? 'Your company'}</span></div><Button variant="secondary" onClick={() => go('employees')}><Settings size={15} /> Manage profile</Button></div>
-    <div className="profile-grid">
-      <Card><div className="section-heading"><div><h2>Personal details</h2><p>Your workspace identity</p></div></div><div className="profile-details">{[['Employee ID', employee?.code], ['Email', employee?.email], ['Phone', employee?.phone], ['Department', employee?.department], ['Shift', employee ? `${employee.shiftStart} – ${employee.shiftEnd}` : null], ['Company', company?.name]].map(([label, value]) => <div key={label}><span>{label}</span><strong>{value || 'Not added'}</strong></div>)}</div></Card>
-      <Card><div className="section-heading"><div><h2>Preferences & tools</h2><p>Personalize your workspace</p></div></div><div className="profile-preferences"><button className="settings-link" onClick={() => state.setTheme(state.theme === 'dark' ? 'light' : 'dark')}><span className="profile-tool-icon"><Moon size={17} /></span><span><strong>Appearance</strong><small>{state.theme === 'dark' ? 'Dark mode is on' : 'Light mode is on'}</small></span><span className={`toggle ${state.theme === 'dark' ? 'on' : ''}`}><i /></span></button><button className="settings-link" onClick={() => go('employees')}><span className="profile-tool-icon"><Users size={17} /></span><span><strong>Employee directory</strong><small>View team and salary settings</small></span><ArrowRight size={16} /></button><button className="settings-link" onClick={() => go('companies')}><span className="profile-tool-icon"><Building2 size={17} /></span><span><strong>Company workspace</strong><small>{state.companies.length} companies available</small></span><ArrowRight size={16} /></button><button className="settings-link" onClick={exportAttendance}><span className="profile-tool-icon"><Download size={17} /></span><span><strong>Export attendance</strong><small>Download a CSV for this company</small></span><ArrowRight size={16} /></button><button className="settings-link" onClick={() => go('settings')}><span className="profile-tool-icon"><Settings size={17} /></span><span><strong>More settings</strong><small>Workspace data and reminders</small></span><ArrowRight size={16} /></button></div></Card>
+    <section className="employee-profile-hero">
+      <div className="profile-avatar-wrap">
+        <Avatar employee={employee} size="large" />
+        <span className={`profile-online-indicator ${employee.status === 'active' ? 'online' : ''}`} aria-label={employee.status === 'active' ? 'Active employee' : 'Inactive employee'} />
+        <span className="profile-avatar-mark"><UserRound size={17} /></span>
+      </div>
+      <div className="employee-profile-intro">
+        <span className="profile-kicker"><span className="profile-kicker-dot" />EMPLOYEE PROFILE</span>
+        <h2>{employee.name}</h2>
+        <p>{employee.designation || 'Designation not provided'} <span>·</span> {employee.department || 'Department not provided'}</p>
+        <div className="profile-identity"><span><IdCard size={14} />{employee.code}</span><span><Building2 size={14} />{company?.name ?? 'Company not provided'}</span></div>
+      </div>
+      <div className="profile-hero-actions">
+        <Button variant="secondary" onClick={edit}><Settings size={15} /> Edit profile</Button>
+        <label className="button outline profile-photo-button"><Camera size={15} /> Change photo<input type="file" accept="image/*" onChange={changePhoto} aria-label="Change profile photo" /></label>
+      </div>
+    </section>
+
+    <div className="profile-stat-grid">
+      <div className="profile-stat-card blue"><span className="profile-stat-icon"><CalendarDays size={18} /></span><span className="profile-stat-label">Total working days</span><strong>{new Set(sessions.map((item) => item.date)).size}</strong><small>Recorded attendance days</small></div>
+      <div className="profile-stat-card purple"><span className="profile-stat-icon"><Clock3 size={18} /></span><span className="profile-stat-label">Total login hours</span><strong>{formatDuration(loginMilliseconds)}</strong><small>Time between sign in and sign out</small></div>
+      <div className="profile-stat-card teal"><span className="profile-stat-icon"><BriefcaseBusiness size={18} /></span><span className="profile-stat-label">Actual working hours</span><strong>{formatDuration(workMilliseconds)}</strong><small>Breaks excluded</small></div>
+      <div className="profile-stat-card indigo"><span className="profile-stat-icon"><Check size={18} /></span><span className="profile-stat-label">Attendance percentage</span><strong>{attendancePercent}%</strong><small>This month to date</small></div>
+    </div>
+
+    <div className="profile-content-grid">
+      <div className="profile-info-stack">
+        <Card className="employee-info-card">
+          <div className="profile-section-title"><span className="profile-section-icon blue"><UserRound size={17} /></span><div><h2>Personal information</h2><p>Basic employee details</p></div></div>
+          <div className="profile-details">
+            <div><span>Employee name</span><strong>{employee.name}</strong></div>
+            <div><span>Employee ID</span><strong>{employee.code}</strong></div>
+            <div><span>Joining date</span><strong>{employee.joiningDate ? new Date(`${employee.joiningDate}T12:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' }) : 'Not provided'}</strong></div>
+            <div><span>Employee status</span><strong><span className={`profile-status ${employee.status === 'active' ? 'active' : ''}`}><i />{employee.status}</span></strong></div>
+          </div>
+        </Card>
+        <Card className="employee-info-card">
+          <div className="profile-section-title"><span className="profile-section-icon purple"><BriefcaseBusiness size={17} /></span><div><h2>Employee details</h2><p>Role, team and schedule</p></div></div>
+          <div className="profile-details">
+            <div><span>Department</span><strong>{employee.department || 'Not provided'}</strong></div>
+            <div><span>Designation</span><strong>{employee.designation || 'Not provided'}</strong></div>
+            <div><span>Shift timing</span><strong>{shift}</strong></div>
+            <div><span>Required hours</span><strong>{employee.requiredHours} hours / day</strong></div>
+          </div>
+        </Card>
+        <Card className="employee-info-card">
+          <div className="profile-section-title"><span className="profile-section-icon teal"><Building2 size={17} /></span><div><h2>Company information</h2><p>Current employee workspace</p></div></div>
+          <div className="profile-details">
+            <div><span>Company</span><strong>{company?.name ?? 'Not provided'}</strong></div>
+            <div><span>Location</span><strong>{company?.address || 'Not provided'}</strong></div>
+            <div><span>Work email</span><strong>{company?.email || 'Not provided'}</strong></div>
+            <div><span>Employee status</span><strong>{employee.status}</strong></div>
+          </div>
+        </Card>
+        <Card className="employee-info-card">
+          <div className="profile-section-title"><span className="profile-section-icon teal"><Phone size={17} /></span><div><h2>Contact information</h2><p>Employee contact details</p></div></div>
+          <div className="profile-details">
+            <div><span>Email address</span><strong>{employee.email || 'Not provided'}</strong></div>
+            <div><span>Phone number</span><strong>{employee.phone || 'Not provided'}</strong></div>
+          </div>
+        </Card>
+      </div>
+
+      <Card className="profile-actions-card">
+        <div className="profile-section-title"><span className="profile-section-icon purple"><Settings size={17} /></span><div><h2>Profile actions</h2><p>Quick access to your workspace</p></div></div>
+        <div className="profile-action-list">
+          <button onClick={edit}><span className="profile-action-icon blue"><UserRound size={17} /></span><span><strong>Edit profile</strong><small>Update employee details</small></span><ArrowRight size={16} /></button>
+          <button onClick={() => go('attendance')}><span className="profile-action-icon teal"><CalendarDays size={17} /></span><span><strong>View attendance</strong><small>Review your attendance calendar</small></span><ArrowRight size={16} /></button>
+          <button onClick={() => go('attendance')}><span className="profile-action-icon purple"><Clock3 size={17} /></span><span><strong>Login history</strong><small>See recorded clock-in sessions</small></span><ArrowRight size={16} /></button>
+          <button onClick={() => go('reports')}><span className="profile-action-icon teal"><FileText size={17} /></span><span><strong>Working hours report</strong><small>Explore attendance reports</small></span><ArrowRight size={16} /></button>
+          <button onClick={() => go('settings')}><span className="profile-action-icon blue"><Settings size={17} /></span><span><strong>Settings</strong><small>Appearance and preferences</small></span><ArrowRight size={16} /></button>
+          <button onClick={exportAttendance}><span className="profile-action-icon purple"><Download size={17} /></span><span><strong>Export attendance</strong><small>Download a company attendance CSV</small></span><ArrowRight size={16} /></button>
+          <button className="profile-logout-action" onClick={logout} disabled={!activeSession}><span className="profile-action-icon rose"><LogOut size={17} /></span><span><strong>Logout</strong><small>{activeSession ? 'End your current login session' : 'No active login session'}</small></span><ArrowRight size={16} /></button>
+        </div>
+        <button className="settings-link profile-theme-action" onClick={() => state.setTheme(state.theme === 'dark' ? 'light' : 'dark')}><span className="profile-tool-icon"><Moon size={17} /></span><span><strong>Appearance</strong><small>{state.theme === 'dark' ? 'Dark mode is on' : 'Light mode is on'}</small></span><span className={`toggle ${state.theme === 'dark' ? 'on' : ''}`}><i /></span></button>
+      </Card>
     </div>
   </>;
 }
