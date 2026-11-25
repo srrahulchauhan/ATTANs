@@ -633,6 +633,12 @@ function ReportsPage({ state, employees, company, exportAttendance, notify }) {
   const [endDate, setEndDate] = useState(todayKey());
   const employeeMap = new Map(employees.map((employee) => [employee.id, employee]));
   const adjustmentKeys = new Set(state.attendanceAdjustments.map((item) => `${item.employeeId}:${item.date}`));
+  const isPaymentReport = reportType === 'Salary Payments';
+  const isContributionReport = reportType === 'Contribution Account';
+  const isLedgerReport = isPaymentReport || isContributionReport;
+  const reportStatuses = isPaymentReport
+    ? ['Salary payment']
+    : isContributionReport ? ['Attendance salary', 'Overtime credit', 'Salary payment'] : attendanceStatuses;
   const attendanceRows = [
     ...state.attendanceAdjustments
       .filter((item) => employeeMap.has(item.employeeId))
@@ -654,7 +660,7 @@ function ReportsPage({ state, employees, company, exportAttendance, notify }) {
       .filter((session) => employeeMap.has(session.employeeId) && !adjustmentKeys.has(`${session.employeeId}:${session.date}`))
       .map((session) => {
         const employee = employeeMap.get(session.employeeId);
-        const workHours = Number(session.workMs ?? 0) / 3600000;
+        const workHours = sessionWorkMilliseconds(session, Date.now()) / 3600000;
         const status = workHours >= Number(employee.salary?.fullDayHours ?? employee.requiredHours ?? 8)
           ? 'Present'
           : workHours >= Number(employee.salary?.halfDayHours ?? 4) ? 'Half Day' : 'Absent';
@@ -671,15 +677,37 @@ function ReportsPage({ state, employees, company, exportAttendance, notify }) {
         };
       }),
   ];
-  const filteredRows = attendanceRows.filter((item) => {
+  const ledgerRows = state.salaryTransactions
+    .filter((transaction) => employeeMap.has(transaction.employeeId))
+    .filter((transaction) => !isPaymentReport || transaction.type === 'salary-payment')
+    .map((transaction) => {
+      const employee = employeeMap.get(transaction.employeeId);
+      const payment = transaction.type === 'salary-payment'
+        ? state.salaryPayments.find((item) => item.id === transaction.id)
+        : null;
+      const date = payment ? localDateKey(new Date(payment.paidAt)) : transaction.attendanceDate;
+      const status = transaction.type === 'attendance-credit'
+        ? 'Attendance salary'
+        : transaction.type === 'overtime-credit' ? 'Overtime credit' : 'Salary payment';
+      return {
+        employee,
+        date,
+        status,
+        note: transaction.description,
+        overtimeHours: Number(transaction.hours ?? 0),
+        salaryEarnings: transaction.type === 'overtime-credit' ? 0 : Number(transaction.amount ?? 0),
+        overtimeEarnings: transaction.type === 'overtime-credit' ? Number(transaction.amount ?? 0) : 0,
+      };
+    });
+  const filteredRows = (isLedgerReport ? ledgerRows : attendanceRows).filter((item) => {
     if (item.date < startDate || item.date > endDate) return false;
     if (employeeId !== 'All' && item.employee.id !== employeeId) return false;
     if (statusFilter !== 'All' && item.status !== statusFilter) return false;
-    if (reportType === 'Overtime' && item.overtimeHours <= 0) return false;
-    if (reportType === 'Salary' && item.salaryEarnings + item.overtimeEarnings <= 0) return false;
-    if (reportType === 'Holiday' && !['Weekly Off', 'Public Holiday'].includes(item.status)) return false;
-    if (reportType === 'Absent' && item.status !== 'Absent') return false;
-    if (reportType === 'Half Day' && item.status !== 'Half Day') return false;
+    if (!isLedgerReport && reportType === 'Overtime' && item.overtimeHours <= 0) return false;
+    if (!isLedgerReport && reportType === 'Salary' && item.salaryEarnings + item.overtimeEarnings <= 0) return false;
+    if (!isLedgerReport && reportType === 'Holiday' && !['Weekly Off', 'Public Holiday'].includes(item.status)) return false;
+    if (!isLedgerReport && reportType === 'Absent' && item.status !== 'Absent') return false;
+    if (!isLedgerReport && reportType === 'Half Day' && item.status !== 'Half Day') return false;
     return true;
   }).sort((a, b) => b.date.localeCompare(a.date));
   const presentDays = filteredRows.filter((item) => item.status === 'Present').length;
@@ -688,14 +716,15 @@ function ReportsPage({ state, employees, company, exportAttendance, notify }) {
   const holidays = filteredRows.filter((item) => ['Weekly Off', 'Public Holiday'].includes(item.status)).length;
   const overtimeHours = filteredRows.reduce((sum, item) => sum + item.overtimeHours, 0);
   const totalEarned = filteredRows.reduce((sum, item) => sum + item.salaryEarnings + item.overtimeEarnings, 0);
-  const filteredEmployeeIds = new Set(filteredRows.map((item) => item.employee.id));
-  const totalPaid = state.salaryPayments.filter((item) => filteredEmployeeIds.has(item.employeeId) && item.paidAt >= new Date(`${startDate}T00:00:00`).getTime() && item.paidAt <= new Date(`${endDate}T23:59:59`).getTime())
+  const selectedEmployeeIds = new Set(employees.filter((item) => employeeId === 'All' || item.id === employeeId).map((item) => item.id));
+  const totalPaid = state.salaryPayments.filter((item) => selectedEmployeeIds.has(item.employeeId) && item.paidAt >= new Date(`${startDate}T00:00:00`).getTime() && item.paidAt <= new Date(`${endDate}T23:59:59`).getTime())
     .reduce((sum, item) => sum + Number(item.amount ?? 0), 0);
   const remainingBalance = state.salaryTransactions.filter((item) => employeeId === 'All' ? employees.some((person) => person.id === item.employeeId) : item.employeeId === employeeId)
     .reduce((sum, item) => sum + Number(item.amount ?? 0), 0);
 
   function chooseReportType(type) {
     setReportType(type);
+    setStatusFilter('All');
     const today = new Date();
     if (type === 'Daily') {
       setStartDate(todayKey());
@@ -742,7 +771,7 @@ function ReportsPage({ state, employees, company, exportAttendance, notify }) {
     return exportFiltered(`attan-salary-ledger-${state.activeCompanyId}-${startDate}`, rows, 'Salary ledger downloaded.');
   }
   const exportRows = [
-    ['Employee', 'Employee ID', 'Date', 'Status', 'Overtime hours', 'Salary earned', 'Overtime earnings', 'Remarks'],
+    ['Employee', 'Employee ID', 'Date', 'Status / transaction', 'Overtime hours', 'Salary earned / paid', 'Overtime earnings', 'Remarks'],
     ...filteredRows.map((item) => [item.employee.name, item.employee.code, item.date, item.status, item.overtimeHours, Number(item.salaryEarnings.toFixed(2)), Number(item.overtimeEarnings.toFixed(2)), item.note]),
   ];
   async function exportSpreadsheet() {
@@ -765,16 +794,22 @@ function ReportsPage({ state, employees, company, exportAttendance, notify }) {
   }
   return <>
     <div className="screen-intro"><div><p className="eyebrow">INSIGHTS & EXPORTS</p><h2>Reports that keep you in sync</h2><p>Filter saved attendance and payroll data for {company?.name ?? 'your workspace'}.</p></div></div>
-    <Card className="report-filters"><label className="field"><span>Report type</span><select value={reportType} onChange={(event) => chooseReportType(event.target.value)}>{['Daily', 'Weekly', 'Friday', 'Monthly', 'Custom', 'Overtime', 'Salary', 'Holiday', 'Absent', 'Half Day'].map((type) => <option key={type}>{type}</option>)}</select></label><label className="field"><span>Employee</span><select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}><option value="All">All employees</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}</select></label><label className="field"><span>Status</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="All">All statuses</option>{attendanceStatuses.map((status) => <option key={status}>{status}</option>)}</select></label>{reportType === 'Monthly' && <label className="field"><span>Month</span><input type="month" value={reportMonth} onChange={(event) => { if (!event.target.value) return; setReportMonth(event.target.value); setStartDate(`${event.target.value}-01`); setEndDate(todayKey().slice(0, 7) === event.target.value ? todayKey() : lastDayOfMonth(event.target.value)); }} /></label>}<label className="field"><span>Start date</span><input type="date" value={startDate} max={todayKey()} onChange={(event) => { if (event.target.value) setStartDate(event.target.value); }} /></label><label className="field"><span>End date</span><input type="date" value={endDate} min={startDate} max={todayKey()} onChange={(event) => { if (event.target.value) setEndDate(event.target.value); }} /></label></Card>
+    <Card className="report-filters"><label className="field"><span>Report type</span><select value={reportType} onChange={(event) => chooseReportType(event.target.value)}>{['Daily', 'Weekly', 'Friday', 'Monthly', 'Custom', 'Overtime', 'Salary', 'Holiday', 'Absent', 'Half Day', 'Salary Payments', 'Contribution Account'].map((type) => <option key={type}>{type}</option>)}</select></label><label className="field"><span>Employee</span><select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}><option value="All">All employees</option>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}</select></label><label className="field"><span>{isLedgerReport ? 'Transaction type' : 'Status'}</span><select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}><option value="All">All {isLedgerReport ? 'transactions' : 'statuses'}</option>{reportStatuses.map((status) => <option key={status}>{status}</option>)}</select></label>{reportType === 'Monthly' && <label className="field"><span>Month</span><input type="month" value={reportMonth} onChange={(event) => { if (!event.target.value) return; setReportMonth(event.target.value); setStartDate(`${event.target.value}-01`); setEndDate(todayKey().slice(0, 7) === event.target.value ? todayKey() : lastDayOfMonth(event.target.value)); }} /></label>}<label className="field"><span>Start date</span><input type="date" value={startDate} max={todayKey()} onChange={(event) => { if (event.target.value) setStartDate(event.target.value); }} /></label><label className="field"><span>End date</span><input type="date" value={endDate} min={startDate} max={todayKey()} onChange={(event) => { if (event.target.value) setEndDate(event.target.value); }} /></label></Card>
     <div className="report-summary">
-      <div><span className="report-summary-icon green"><Check size={17} /></span><small>Present days</small><strong>{presentDays}</strong><span>Across your team</span></div>
-      <div><span className="report-summary-icon rose"><X size={17} /></span><small>Absent days</small><strong>{absentDays}</strong><span>Recorded this month</span></div>
-      <div><span className="report-summary-icon amber"><Clock3 size={17} /></span><small>Half days</small><strong>{halfDays}</strong><span>{holidays} holidays / week-offs</span></div>
-      <div><span className="report-summary-icon blue"><Clock3 size={17} /></span><small>Overtime hours</small><strong>{overtimeHours}</strong><span>Approved entries</span></div>
-      <div><span className="report-summary-icon green"><Wallet size={17} /></span><small>Salary earned</small><strong>{currency(totalEarned)}</strong><span>{currency(totalPaid)} paid</span></div>
-      <div><span className="report-summary-icon blue"><Wallet size={17} /></span><small>Account balance</small><strong>{currency(remainingBalance)}</strong><span>Current contribution ledger</span></div>
+      {isLedgerReport ? <>
+        <div><span className="report-summary-icon blue"><FileText size={17} /></span><small>Transactions</small><strong>{filteredRows.length}</strong><span>{startDate} through {endDate}</span></div>
+        <div><span className="report-summary-icon green"><Wallet size={17} /></span><small>{isPaymentReport ? 'Salary paid' : 'Net account movement'}</small><strong>{currency(isPaymentReport ? totalPaid : totalEarned)}</strong><span>{isPaymentReport ? 'Payments in selected range' : `${currency(totalPaid)} paid in selected range`}</span></div>
+        <div><span className="report-summary-icon blue"><Wallet size={17} /></span><small>Account balance</small><strong>{currency(remainingBalance)}</strong><span>Current contribution ledger</span></div>
+      </> : <>
+        <div><span className="report-summary-icon green"><Check size={17} /></span><small>Present days</small><strong>{presentDays}</strong><span>Across your team</span></div>
+        <div><span className="report-summary-icon rose"><X size={17} /></span><small>Absent days</small><strong>{absentDays}</strong><span>{startDate} through {endDate}</span></div>
+        <div><span className="report-summary-icon amber"><Clock3 size={17} /></span><small>Half days</small><strong>{halfDays}</strong><span>{holidays} holidays / week-offs</span></div>
+        <div><span className="report-summary-icon blue"><Clock3 size={17} /></span><small>Overtime hours</small><strong>{overtimeHours}</strong><span>Approved entries</span></div>
+        <div><span className="report-summary-icon green"><Wallet size={17} /></span><small>Salary earned</small><strong>{currency(totalEarned)}</strong><span>{currency(totalPaid)} paid</span></div>
+        <div><span className="report-summary-icon blue"><Wallet size={17} /></span><small>Account balance</small><strong>{currency(remainingBalance)}</strong><span>Current contribution ledger</span></div>
+      </>}
     </div>
-    <Card className="report-table-card"><div className="section-heading"><div><h2>{reportType} attendance report</h2><p>{startDate} through {endDate} · {filteredRows.length} saved attendance entries</p></div><span className="report-chip">{company?.name}</span></div>
+    <Card className="report-table-card"><div className="section-heading"><div><h2>{reportType} {isLedgerReport ? 'ledger report' : 'attendance report'}</h2><p>{startDate} through {endDate} · {filteredRows.length} {isLedgerReport ? 'transactions' : 'attendance entries'}</p></div><span className="report-chip">{company?.name}</span></div>
       {filteredRows.length ? <div className="report-table-wrap"><table className="report-table"><thead><tr><th>Date</th><th>Team member</th><th>Status</th><th>Overtime</th><th>Salary</th><th>OT earnings</th><th>Remarks</th></tr></thead><tbody>{filteredRows.map((item) => <tr key={`${item.employee.id}-${item.date}`}><td>{new Date(`${item.date}T12:00:00`).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</td><td><span className="report-person"><Avatar employee={item.employee} /><span><strong>{item.employee.name}</strong><small>{item.employee.code}</small></span></span></td><td><span className={`status-tag ${item.status.toLowerCase().replace(/\s+/g, '-')}`}>{item.status}</span></td><td>{item.overtimeHours}h</td><td>{currency(item.salaryEarnings)}</td><td>{currency(item.overtimeEarnings)}</td><td>{item.note || '—'}</td></tr>)}</tbody></table></div> : <div className="empty-state"><BarChart3 size={26} /><strong>No records match these filters</strong><p>Try a different employee, report type, or date range.</p></div>}
       <div className="report-actions"><Button variant="secondary" onClick={exportAttendanceReport}><Download size={15} /> CSV</Button><Button onClick={exportSpreadsheet}><Download size={15} /> Excel</Button><Button variant="outline" onClick={exportPdfReport}><Download size={15} /> PDF</Button><Button variant="outline" onClick={exportAttendanceReport}><FileText size={15} /> Sheets CSV</Button><Button variant="outline" onClick={exportPayroll}><Download size={15} /> Salary ledger</Button><Button variant="outline" onClick={exportAttendance}><Download size={15} /> Full history</Button></div>
     </Card>
