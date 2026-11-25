@@ -1,0 +1,19 @@
+{
+  "name": "Attan HRMS",
+  "short_name": "Attan",
+  "description": "Attendance, payroll, and employee management.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f3f5fa",
+  "theme_color": "#4146a9",
+  "icons": [
+    {
+      "src": "/assets/attan-app-icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any maskable"
+    }
+  ]
+}
