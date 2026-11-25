@@ -1,22 +1,19 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
-  ArrowDownToLine, ArrowLeft, ArrowRight, BadgeIndianRupee,
-  Building2, CalendarDays, Check, ChevronDown, Clock3, Coffee, Download,
-  FileSpreadsheet, LayoutDashboard, LogIn, LogOut, Moon, Plus, Search,
-  Settings, Sun, Users, Wallet, X,
+  ArrowRight, Building2, CalendarDays, Check, ChevronDown, Clock3,
+  Coffee, Download, LayoutDashboard, LogIn, LogOut, Moon, Plus, Search,
+  Settings, Sun, Users, X,
 } from 'lucide-react';
 import { useHrmsStore } from './store/hrmsStore.js';
-import { exportCsv, exportXlsx } from './services/exportService.web.js';
-import { attendanceStatuses, calculatePayroll } from './utils/salaryCalculator.js';
+import { exportCsv } from './services/exportService.web.js';
 import { formatDuration, sessionWorkMilliseconds, todayKey } from './utils/timeCalculator.js';
 
 const currency = (amount) => `₹${Number(amount || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
-const monthNow = todayKey().slice(0, 7);
+const attendanceStatuses = ['Present', 'Half Day', 'Absent', 'Paid Leave', 'Unpaid Leave', 'Weekly Off', 'Public Holiday'];
 const navItems = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { id: 'employees', label: 'Employees', icon: Users },
   { id: 'attendance', label: 'Attendance', icon: Clock3 },
-  { id: 'payroll', label: 'Payroll', icon: Wallet },
   { id: 'settings', label: 'Settings', icon: Settings },
 ];
 const colors = ['#4f46e5', '#0ea5e9', '#10b981', '#f59e0b', '#ec4899', '#8b5cf6'];
@@ -88,7 +85,6 @@ function App() {
   const [modal, setModal] = useState(null);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
   const [now, setNow] = useState(Date.now());
-  const [month, setMonth] = useState(monthNow);
   const [query, setQuery] = useState('');
   const [department, setDepartment] = useState('All');
 
@@ -112,20 +108,10 @@ function App() {
   }, [state.theme]);
 
   const todaySessions = state.sessions.filter((item) => item.companyId === state.activeCompanyId && item.date === todayKey());
-  const monthSummaries = useMemo(() => activeEmployees.map((employee) => ({
-    employee,
-    values: calculatePayroll(employee, state.sessions, state.attendanceAdjustments, state.overtimeRequests, state.salaryAdjustments, company, month),
-    record: state.payroll.find((item) => item.employeeId === employee.id && item.month === month),
-  })), [activeEmployees, state.sessions, state.attendanceAdjustments, state.overtimeRequests, state.salaryAdjustments, state.payroll, company, month]);
-  const currentPayroll = monthSummaries.reduce((sum, item) => sum + item.values.netPayable, 0);
   const filteredEmployees = companyEmployees.filter((employee) => {
     const text = `${employee.name} ${employee.code} ${employee.designation} ${employee.department}`.toLowerCase();
     return text.includes(query.toLowerCase()) && (department === 'All' || employee.department === department);
   });
-
-  function notify(message) {
-    window.alert(message);
-  }
 
   function openEmployee(employee) {
     setModal({ type: 'employee', employee });
@@ -198,71 +184,11 @@ function App() {
       registration: values.registration.trim(),
       color: values.color || colors[0],
       holidays: existing?.holidays ?? [],
-      salaryPolicy: { payWeeklyOff: !!values.payWeeklyOff, payPublicHoliday: !!values.payPublicHoliday },
+      salaryPolicy: existing?.salaryPolicy ?? { payWeeklyOff: true, payPublicHoliday: true },
     };
     if (existing) state.updateCompany(item);
     else state.addCompany(item);
     setModal(null);
-  }
-
-  async function submitPayment(record, amount, method) {
-    const payment = Number(amount);
-    if (!Number.isFinite(payment) || payment <= 0) return notify('Enter a payment amount greater than zero.');
-    const remaining = record.netPayable - record.paidAmount;
-    if (payment > remaining) return notify(`Payment exceeds the remaining balance of ${currency(remaining)}.`);
-    state.payPayroll(record.id, payment, method);
-    setModal(null);
-  }
-
-  function generatePayroll() {
-    if (!monthSummaries.length) return notify('Add employees before generating payroll.');
-    monthSummaries.forEach(({ employee, values, record }) => {
-      const paidAmount = record?.paidAmount ?? 0;
-      state.savePayroll({
-        id: `${state.activeCompanyId}-${employee.id}-${month}`,
-        employeeId: employee.id,
-        companyId: state.activeCompanyId,
-        month,
-        monthlySalary: values.monthlySalary,
-        workingDays: values.workingDays,
-        perDaySalary: values.perDaySalary,
-        presentDays: values.attendance.Present,
-        halfDays: values.attendance['Half Day'],
-        paidLeaveDays: values.attendance['Paid Leave'],
-        unpaidLeaveDays: values.attendance['Unpaid Leave'],
-        absentDays: values.attendance.Absent,
-        paidDays: values.attendance.paidDays,
-        earnedSalary: values.earnedSalary,
-        attendanceDeduction: values.attendanceDeduction,
-        overtime: values.overtimeEarnings,
-        allowances: values.allowances,
-        deductions: values.otherDeductions,
-        adjustments: values.manualAdjustments,
-        netPayable: values.netPayable,
-        paidAmount,
-        status: paidAmount >= values.netPayable ? 'paid' : paidAmount > 0 ? 'partial' : 'pending',
-        paymentMethod: record?.paymentMethod ?? '',
-        paymentHistory: record?.paymentHistory ?? [],
-      });
-    });
-    notify(`Payroll recalculated for ${monthSummaries.length} employee(s).`);
-  }
-
-  async function exportPayroll(format) {
-    const rows = [
-      ['Employee', 'Month', 'Monthly salary', 'Working days', 'Per day salary', 'Present', 'Half day', 'Paid leave', 'Unpaid leave', 'Absent', 'Paid days', 'Earned salary', 'Attendance deduction', 'Overtime', 'Allowances', 'Other deductions', 'Adjustments', 'Net payable', 'Paid amount', 'Pending'],
-      ...monthSummaries.map(({ employee, values, record }) => [
-        employee.name, month, values.monthlySalary, values.workingDays, values.perDaySalary.toFixed(2),
-        values.attendance.Present, values.attendance['Half Day'], values.attendance['Paid Leave'],
-        values.attendance['Unpaid Leave'], values.attendance.Absent, values.attendance.paidDays,
-        values.earnedSalary.toFixed(2), values.attendanceDeduction.toFixed(2), values.overtimeEarnings.toFixed(2),
-        values.allowances.toFixed(2), values.otherDeductions.toFixed(2), values.manualAdjustments.toFixed(2),
-        values.netPayable.toFixed(2), record?.paidAmount ?? 0, Math.max(0, values.netPayable - (record?.paidAmount ?? 0)).toFixed(2),
-      ]),
-    ];
-    const filename = `attan-payroll-${state.activeCompanyId}-${month}`;
-    if (format === 'xlsx') await exportXlsx(filename, 'Payroll', rows);
-    else await exportCsv(filename, rows);
   }
 
   async function exportAttendance() {
@@ -276,18 +202,7 @@ function App() {
     await exportCsv(`attan-attendance-${state.activeCompanyId}-${todayKey()}`, rows);
   }
 
-  function changeMonth(amount) {
-    const [year, value] = month.split('-').map(Number);
-    const date = new Date(year, value - 1 + amount, 1);
-    setMonth(`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`);
-  }
-
-  function startAdjustment() {
-    if (!activeEmployees.length) return notify('Add an employee before creating a salary adjustment.');
-    setModal({ type: 'adjustment', employeeId: activeEmployees[0].id });
-  }
-
-  const titleMap = { dashboard: ['PEOPLE & OPERATIONS', 'Dashboard'], employees: ['YOUR TEAM', 'Employees'], attendance: ['TIME & ATTENDANCE', 'Attendance'], payroll: ['SALARY & PAYMENTS', 'Payroll'], settings: ['ACCOUNT & SETTINGS', 'Settings'], companies: ['WORKSPACE', 'Companies'] };
+  const titleMap = { dashboard: ['PEOPLE & OPERATIONS', 'Dashboard'], employees: ['YOUR TEAM', 'Employees'], attendance: ['TIME & ATTENDANCE', 'Attendance'], settings: ['ACCOUNT & SETTINGS', 'Settings'], companies: ['WORKSPACE', 'Companies'] };
   const [eyebrow, title] = titleMap[page] ?? titleMap.dashboard;
 
   return (
@@ -321,10 +236,9 @@ function App() {
               : page === 'companies' ? <Button onClick={() => setModal({ type: 'company', company: null })}><Plus size={16} /> Add company</Button>
                 : null
           } />}
-          {page === 'dashboard' && <DashboardPage state={state} company={company} activeEmployees={activeEmployees} todaySessions={todaySessions} monthPayroll={currentPayroll} go={setPage} markAttendance={() => setModal({ type: 'quick-attendance' })} />}
+          {page === 'dashboard' && <DashboardPage state={state} company={company} activeEmployees={activeEmployees} todaySessions={todaySessions} go={setPage} markAttendance={() => setModal({ type: 'quick-attendance' })} />}
           {page === 'employees' && <EmployeesPage employees={filteredEmployees} allEmployees={companyEmployees} query={query} setQuery={setQuery} department={department} setDepartment={setDepartment} edit={openEmployee} remove={removeEmployee} />}
           {page === 'attendance' && <AttendancePage state={state} employees={activeEmployees} selected={selectedEmployee} selectEmployee={setSelectedEmployeeId} session={session} todaySession={todaySession} correction={todayCorrection} workMs={workMs} workHours={workHours} now={now} />}
-          {page === 'payroll' && <PayrollPage state={state} company={company} month={month} summaries={monthSummaries} currentTotal={currentPayroll} changeMonth={changeMonth} exportPayroll={exportPayroll} generate={generatePayroll} adjust={startAdjustment} pay={(record) => setModal({ type: 'payment', record })} edit={openEmployee} />}
           {page === 'companies' && <CompaniesPage state={state} setModal={setModal} go={setPage} />}
           {page === 'settings' && <SettingsPage state={state} company={company} exportAttendance={exportAttendance} setPage={setPage} />}
         </div>
@@ -332,8 +246,6 @@ function App() {
       </main>
       {modal?.type === 'employee' && <EmployeeModal employee={modal.employee} onClose={() => setModal(null)} onSave={saveEmployee} onDelete={removeEmployee} />}
       {modal?.type === 'company' && <CompanyModal company={modal.company} onClose={() => setModal(null)} onSave={saveCompany} />}
-      {modal?.type === 'payment' && <PaymentModal record={modal.record} employee={state.employees.find((item) => item.id === modal.record.employeeId)} onClose={() => setModal(null)} onSave={submitPayment} />}
-      {modal?.type === 'adjustment' && <AdjustmentModal employees={activeEmployees} initialEmployee={modal.employeeId} month={month} onClose={() => setModal(null)} onSave={(entry) => { state.addSalaryAdjustment(entry); setModal(null); }} companyId={state.activeCompanyId} />}
       {modal?.type === 'quick-attendance' && <QuickAttendanceModal employees={activeEmployees} onClose={() => setModal(null)} onSave={async (entry) => { await state.markAttendance(entry.employeeId, todayKey(), entry.status, entry.note); setModal(null); }} />}
     </div>
   );
@@ -343,30 +255,22 @@ function MobileNav({ page, setPage }) {
   return <nav className="mobile-nav">{navItems.slice(0, 5).map(({ id, label, icon: Icon }) => <button key={id} className={page === id ? 'selected' : ''} onClick={() => setPage(id)}><Icon size={19} /><span>{label}</span></button>)}</nav>;
 }
 
-function DashboardPage({ state, company, activeEmployees, todaySessions, monthPayroll, go, markAttendance }) {
+function DashboardPage({ state, company, activeEmployees, todaySessions, go, markAttendance }) {
   const working = todaySessions.filter((item) => item.status === 'working').length;
   const breaks = todaySessions.filter((item) => item.status === 'break').length;
   const marked = new Set([...todaySessions.map((item) => item.employeeId), ...state.attendanceAdjustments.filter((item) => item.date === todayKey()).map((item) => item.employeeId)]).size;
-  const month = todayKey().slice(0, 7);
-  const pending = activeEmployees.reduce((sum, employee) => {
-    const record = state.payroll.find((item) => item.employeeId === employee.id && item.month === month);
-    const values = calculatePayroll(employee, state.sessions, state.attendanceAdjustments, state.overtimeRequests, state.salaryAdjustments, company, month);
-    return sum + Math.max(0, values.netPayable - (record?.paidAmount ?? 0));
-  }, 0);
   const activity = [...todaySessions].reverse().slice(0, 5);
   return <>
     <div className="welcome-strip"><div><h2>Welcome back</h2><p>Here&apos;s what&apos;s happening with your team today.</p></div><div className="welcome-date"><CalendarDays size={17} />{new Date().toLocaleDateString('en-IN', { weekday: 'long', month: 'long', day: 'numeric' })}</div></div>
-    <div className="metric-grid">
+    <div className="metric-grid dashboard-metrics">
       <Metric label="Active employees" value={activeEmployees.length} note={`${state.companies.length} companies`} icon={Users} onClick={() => go('employees')} />
       <Metric label="Attendance marked" value={`${marked} / ${activeEmployees.length}`} note="Tap to mark attendance" icon={Clock3} tone="green" onClick={markAttendance} />
       <Metric label="Working now" value={working} note={`${breaks} currently on break`} icon={Coffee} tone="blue" onClick={() => go('attendance')} />
-      <Metric label="Projected payroll" value={currency(monthPayroll)} note={`${todayKey().slice(0, 7)} · net payable`} icon={Wallet} tone="amber" onClick={() => go('payroll')} />
     </div>
     <div className="dashboard-grid">
       <Card onClick={() => go('attendance')} ariaLabel="Open today's attendance tracker"><div className="section-heading"><div><h2>Today&apos;s attendance</h2><p>Real-time overview for {company?.name}</p></div><div className="attendance-dashboard-actions"><button className="text-button" onClick={markAttendance}><Check size={15} /> Mark attendance</button><button className="text-button" onClick={() => go('attendance')}>Open tracker <ArrowRight size={15} /></button></div></div>
         <div className="attendance-progress"><div className="progress-ring" style={{ '--progress': `${activeEmployees.length ? Math.round(marked / activeEmployees.length * 100) : 0}%` }}><strong>{activeEmployees.length ? Math.round(marked / activeEmployees.length * 100) : 0}%</strong></div><div><h3>{marked} of {activeEmployees.length} employees</h3><p>have an attendance record today</p><div className="legend"><span><i className="green-dot" />Working {working}</span><span><i className="amber-dot" />On break {breaks}</span></div></div></div>
       </Card>
-      <Card className="payroll-card" onClick={() => go('payroll')} ariaLabel="Open payroll details"><div className="section-heading"><div><p className="eyebrow">PAYROLL SNAPSHOT</p><h2>This month</h2></div><Wallet size={20} /></div><strong className="payroll-amount">{currency(monthPayroll)}</strong><p className="muted">Projected net payroll</p><div className="payroll-foot"><span>Pending payments</span><strong>{currency(pending)}</strong></div><button className="payroll-link" onClick={() => go('payroll')}>View payroll <ArrowRight size={15} /></button></Card>
     </div>
     <Card className="activity-card" onClick={() => go('attendance')} ariaLabel="Open recent attendance details"><div className="section-heading"><div><h2>Recent attendance activity</h2><p>Latest team updates for today</p></div><button className="text-button" onClick={() => go('attendance')}>View all <ArrowRight size={15} /></button></div>
       {activity.length ? <div className="activity-list">{activity.map((item) => {
@@ -474,44 +378,11 @@ function AttendancePage({ state, employees, selected, selectEmployee, session, t
   </>;
 }
 
-function PayrollPage({ state, company, month, summaries, currentTotal, changeMonth, exportPayroll, generate, adjust, pay, edit }) {
-  const gross = summaries.reduce((sum, item) => sum + item.values.monthlySalary, 0);
-  const earned = summaries.reduce((sum, item) => sum + item.values.earnedSalary, 0);
-  const deductions = summaries.reduce((sum, item) => sum + item.values.attendanceDeduction + item.values.otherDeductions, 0);
-  const overtimeTotal = summaries.reduce((sum, item) => sum + item.values.overtimeEarnings, 0);
-  const pending = summaries.reduce((sum, item) => sum + Math.max(0, item.values.netPayable - (item.record?.paidAmount ?? 0)), 0);
-  const audit = state.salaryAdjustments.filter((item) => item.companyId === state.activeCompanyId && item.month === month);
-  const showSalaryDetails = () => document.getElementById('payroll-list')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  return <>
-    <Card className="month-picker"><button className="icon-button" onClick={() => changeMonth(-1)} aria-label="Previous month"><ArrowLeft size={17} /></button><div><strong>{new Date(`${month}-01T12:00:00`).toLocaleDateString('en-IN', { month: 'long', year: 'numeric' })}</strong><span>{company?.name ?? 'Company payroll'}</span></div><button className="icon-button" disabled={month >= monthNow} onClick={() => changeMonth(1)} aria-label="Next month"><ArrowRight size={17} /></button></Card>
-    <div className="metric-grid payroll-metrics"><Metric label="Gross salary" value={currency(gross)} note={`${summaries.length} employees`} icon={Wallet} onClick={showSalaryDetails} /><Metric label="Earned salary" value={currency(earned)} note="Based on paid attendance days" icon={BadgeIndianRupee} tone="green" onClick={showSalaryDetails} /><Metric label="Deductions" value={currency(deductions)} note="Attendance shown, not deducted twice" icon={ArrowDownToLine} tone="rose" onClick={showSalaryDetails} /><Metric label="Overtime earnings" value={currency(overtimeTotal)} note="Approved completed hours" icon={Clock3} tone="amber" onClick={showSalaryDetails} /><Metric label="Net payable" value={currency(currentTotal)} note="After allowances and deductions" icon={Wallet} tone="blue" onClick={showSalaryDetails} /><Metric label="Pending payment" value={currency(pending)} note="Unpaid generated balance" icon={Download} tone="rose" onClick={showSalaryDetails} /></div>
-    <div className="section-heading section-gap"><div><h2>Employee salary</h2><p>Attendance and payroll update as records change.</p></div><Button variant="secondary" onClick={adjust}><Plus size={15} /> Adjustment</Button></div>
-    <div className="payroll-list" id="payroll-list">{summaries.map(({ employee, values, record }) => <Card className="salary-card" key={employee.id} onClick={() => edit(employee)} ariaLabel={`Edit ${employee.name} salary`}><div className="salary-card-header"><div className="employee-inline"><Avatar employee={employee} /><div><h3>{employee.name}</h3><p>{employee.code} · {employee.designation}</p></div></div><div className="net-block"><span>NET PAYABLE</span><strong>{currency(values.netPayable)}</strong></div></div>
-      <div className="salary-facts"><span>Monthly<strong>{currency(values.monthlySalary)}</strong></span><span>Working days<strong>{values.workingDays}</strong></span><span>Per day<strong>{currency(values.perDaySalary)}</strong></span><span>Half day<strong>{currency(values.halfDaySalary)}</strong></span></div>
-      <div className="attendance-counts"><Count label="Present" value={values.attendance.Present} /><Count label="Half day" value={values.attendance['Half Day']} /><Count label="Paid leave" value={values.attendance['Paid Leave']} /><Count label="Unpaid leave" value={values.attendance['Unpaid Leave']} /><Count label="Absent" value={values.attendance.Absent} /><Count label="Paid days" value={values.attendance.paidDays} /></div>
-      <div className="pay-lines"><PayLine label="Earned salary" value={currency(values.earnedSalary)} /><PayLine label="Attendance deduction (already reflected in earned salary)" value={`− ${currency(values.attendanceDeduction)}`} subdued /><PayLine label={`Overtime · ${values.overtimeHours.toFixed(1)}h`} value={`+ ${currency(values.overtimeEarnings)}`} positive /><PayLine label="Allowances" value={`+ ${currency(values.allowances)}`} positive /><PayLine label="Other deductions" value={`− ${currency(values.otherDeductions)}`} negative />{values.manualAdjustments !== 0 && <PayLine label="Manual adjustment" value={`${values.manualAdjustments > 0 ? '+' : '−'} ${currency(Math.abs(values.manualAdjustments))}`} positive={values.manualAdjustments > 0} negative={values.manualAdjustments < 0} />}</div>
-      <div className="record-row"><span>{record ? `${record.status} · ${currency(record.paidAmount)} paid` : 'Preview · not generated'}</span><div>{record && record.status !== 'paid' && <Button variant="secondary" onClick={() => pay(record)}>Record payment</Button>}<Button variant="outline" onClick={() => edit(employee)}>Edit salary</Button></div></div>
-      {record?.paymentHistory?.length > 0 && <div className="payment-history"><strong>Payment history</strong>{record.paymentHistory.map((item) => <span key={item.id}>{item.date} · {item.method} · {item.transactionId} <b>{currency(item.amount)}</b></span>)}</div>}
-    </Card>)}</div>
-    {!summaries.length && <div className="empty-state large"><Wallet size={30} /><strong>No employees to calculate</strong><p>Add a team member to start payroll.</p></div>}
-    <Card className="audit-card"><div className="section-heading"><div><h2>Salary adjustment audit</h2><p>{audit.length} entries recorded for {month}</p></div></div>{audit.length ? audit.map((item) => <div className="audit-row" key={item.id}><div><strong>{state.employees.find((employee) => employee.id === item.employeeId)?.name ?? 'Employee'}</strong><span>{item.note} · {new Date(item.createdAt).toLocaleDateString('en-IN')}</span></div><b className={item.amount < 0 ? 'negative' : 'positive'}>{item.amount < 0 ? '−' : '+'}{currency(Math.abs(item.amount))}</b></div>) : <div className="empty-inline">No manual adjustments for this month.</div>}</Card>
-    <div className="export-actions"><Button variant="secondary" onClick={() => exportPayroll('csv')}><Download size={15} /> Export CSV</Button><Button variant="secondary" onClick={() => exportPayroll('xlsx')}><FileSpreadsheet size={15} /> Export Excel</Button><Button onClick={generate}><Check size={15} /> Recalculate all payroll</Button></div>
-  </>;
-}
-
-function Count({ label, value }) {
-  return <div><strong>{value}</strong><span>{label}</span></div>;
-}
-
-function PayLine({ label, value, positive, negative, subdued }) {
-  return <div className={`pay-line ${positive ? 'positive' : ''} ${negative ? 'negative' : ''} ${subdued ? 'subdued' : ''}`}><span>{label}</span><strong>{value}</strong></div>;
-}
-
 function CompaniesPage({ state, setModal, go }) {
   return <div className="company-grid">{state.companies.map((company) => {
     const count = state.employees.filter((employee) => employee.companyId === company.id).length;
     const active = company.id === state.activeCompanyId;
-    return <Card className="company-card" key={company.id} onClick={() => { state.setActiveCompany(company.id); go('dashboard'); }} ariaLabel={`Switch to ${company.name}`}><div className="company-heading"><span className="company-logo" style={{ backgroundColor: company.color }}>{company.name[0]}</span><div><h2>{company.name}</h2><p>{count} employees · {company.address || 'No address'}</p></div>{active && <span className="active-label"><Check size={13} />Active</span>}</div><div className="company-details"><span>{company.email || 'No email'} · {company.phone || 'No phone'}</span><span>Weekly off: {company.salaryPolicy?.payWeeklyOff ? 'Paid' : 'Unpaid'} · Public holiday: {company.salaryPolicy?.payPublicHoliday ? 'Paid' : 'Unpaid'}</span></div><div className="card-actions"><Button variant={active ? 'secondary' : 'outline'} onClick={() => { state.setActiveCompany(company.id); go('dashboard'); }}>{active ? 'Current company' : 'Switch to company'}</Button><Button variant="outline" onClick={() => setModal({ type: 'company', company })}>Edit company</Button>{state.companies.length > 1 && <button className="danger-text" onClick={() => { if (window.confirm(`Delete ${company.name} and all associated local records?`)) { state.deleteCompany(company.id); } }}>Delete</button>}</div></Card>;
+    return <Card className="company-card" key={company.id} onClick={() => { state.setActiveCompany(company.id); go('dashboard'); }} ariaLabel={`Switch to ${company.name}`}><div className="company-heading"><span className="company-logo" style={{ backgroundColor: company.color }}>{company.name[0]}</span><div><h2>{company.name}</h2><p>{count} employees · {company.address || 'No address'}</p></div>{active && <span className="active-label"><Check size={13} />Active</span>}</div><div className="company-details"><span>{company.email || 'No email'} · {company.phone || 'No phone'}</span></div><div className="card-actions"><Button variant={active ? 'secondary' : 'outline'} onClick={() => { state.setActiveCompany(company.id); go('dashboard'); }}>{active ? 'Current company' : 'Switch to company'}</Button><Button variant="outline" onClick={() => setModal({ type: 'company', company })}>Edit company</Button>{state.companies.length > 1 && <button className="danger-text" onClick={() => { if (window.confirm(`Delete ${company.name} and all associated local records?`)) { state.deleteCompany(company.id); } }}>Delete</button>}</div></Card>;
   })}</div>;
 }
 
@@ -577,24 +448,9 @@ function EmployeeModal({ employee, onClose, onSave, onDelete }) {
 function CompanyModal({ company, onClose, onSave }) {
   const [form, setForm] = useState({
     id: company?.id ?? '', name: company?.name ?? '', address: company?.address ?? '', email: company?.email ?? '', phone: company?.phone ?? '', registration: company?.registration ?? '', color: company?.color ?? colors[0],
-    payWeeklyOff: company?.salaryPolicy?.payWeeklyOff ?? true, payPublicHoliday: company?.salaryPolicy?.payPublicHoliday ?? true,
   });
   const change = (name, value) => setForm((current) => ({ ...current, [name]: value }));
-  return <Modal title={company ? 'Edit company' : 'Add company'} onClose={onClose}><form className="modal-form" onSubmit={(event) => { event.preventDefault(); if (!form.name.trim()) return window.alert('Company name is required.'); onSave(form); }}><Field label="Company name" value={form.name} onChange={(event) => change('name', event.target.value)} required /><Field label="Address" value={form.address} onChange={(event) => change('address', event.target.value)} /><Field label="Email" type="email" value={form.email} onChange={(event) => change('email', event.target.value)} /><Field label="Phone" value={form.phone} onChange={(event) => change('phone', event.target.value)} /><Field label="Registration details" value={form.registration} onChange={(event) => change('registration', event.target.value)} /><div className="field"><span>Brand color</span><div className="color-options">{colors.map((color) => <button type="button" key={color} className={form.color === color ? 'chosen' : ''} style={{ background: color }} onClick={() => change('color', color)} aria-label={`Select ${color}`} />)}</div></div><label className="check-row"><input type="checkbox" checked={form.payWeeklyOff} onChange={(event) => change('payWeeklyOff', event.target.checked)} /> Pay weekly offs</label><label className="check-row"><input type="checkbox" checked={form.payPublicHoliday} onChange={(event) => change('payPublicHoliday', event.target.checked)} /> Pay public holidays</label><footer className="modal-actions"><span /><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit"><Check size={15} /> Save company</Button></footer></form></Modal>;
-}
-
-function PaymentModal({ record, employee, onClose, onSave }) {
-  const [amount, setAmount] = useState(String(record.netPayable - record.paidAmount));
-  const [method, setMethod] = useState('Bank transfer');
-  return <Modal title="Record a payment" onClose={onClose}><form className="modal-form" onSubmit={(event) => { event.preventDefault(); onSave(record, amount, method); }}><p className="modal-copy">{employee?.name ?? 'Employee'} · remaining balance {currency(record.netPayable - record.paidAmount)}</p><Field label="Payment amount (₹)" type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} required /><label className="field"><span>Payment method</span><select value={method} onChange={(event) => setMethod(event.target.value)}><option>Bank transfer</option><option>UPI</option><option>Cash</option></select></label><footer className="modal-actions"><span /><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit">Save payment</Button></footer></form></Modal>;
-}
-
-function AdjustmentModal({ employees, initialEmployee, month, companyId, onClose, onSave }) {
-  const [employeeId, setEmployeeId] = useState(initialEmployee);
-  const [amount, setAmount] = useState('');
-  const [note, setNote] = useState('');
-  const [forMonth, setForMonth] = useState(month);
-  return <Modal title="Salary adjustment" onClose={onClose}><form className="modal-form" onSubmit={(event) => { event.preventDefault(); const value = Number(amount); if (!employeeId || !note.trim() || !Number.isFinite(value) || value === 0) return window.alert('Choose an employee, enter a non-zero amount and provide a reason.'); onSave({ id: `salary-adj-${Date.now()}`, employeeId, companyId, month: forMonth, amount: value, note: note.trim(), createdAt: Date.now() }); }}><label className="field"><span>Employee</span><select value={employeeId} onChange={(event) => setEmployeeId(event.target.value)}>{employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.name}</option>)}</select></label><Field label="Amount (negative for deduction)" type="number" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} required /><Field label="Reason (audit log)" value={note} onChange={(event) => setNote(event.target.value)} required /><Field label="Payroll month" type="month" value={forMonth} onChange={(event) => setForMonth(event.target.value)} required /><footer className="modal-actions"><span /><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit">Save adjustment</Button></footer></form></Modal>;
+  return <Modal title={company ? 'Edit company' : 'Add company'} onClose={onClose}><form className="modal-form" onSubmit={(event) => { event.preventDefault(); if (!form.name.trim()) return window.alert('Company name is required.'); onSave(form); }}><Field label="Company name" value={form.name} onChange={(event) => change('name', event.target.value)} required /><Field label="Address" value={form.address} onChange={(event) => change('address', event.target.value)} /><Field label="Email" type="email" value={form.email} onChange={(event) => change('email', event.target.value)} /><Field label="Phone" value={form.phone} onChange={(event) => change('phone', event.target.value)} /><Field label="Registration details" value={form.registration} onChange={(event) => change('registration', event.target.value)} /><div className="field"><span>Brand color</span><div className="color-options">{colors.map((color) => <button type="button" key={color} className={form.color === color ? 'chosen' : ''} style={{ background: color }} onClick={() => change('color', color)} aria-label={`Select ${color}`} />)}</div></div><footer className="modal-actions"><span /><Button type="button" variant="outline" onClick={onClose}>Cancel</Button><Button type="submit"><Check size={15} /> Save company</Button></footer></form></Modal>;
 }
 
 export default App;

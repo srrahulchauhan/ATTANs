@@ -177,24 +177,6 @@ export const useHrmsStore = create(persist((set, get) => ({
       ? { ...item, status, approvedHours: status === 'approved' ? item.requestedHours : 0, completedHours: 0 }
       : item),
   })),
-  savePayroll: (record) => set((state) => ({ payroll: [record, ...state.payroll.filter((item) => item.id !== record.id)] })),
-  addSalaryAdjustment: (adjustment) => set((state) => ({ salaryAdjustments: [adjustment, ...state.salaryAdjustments] })),
-  payPayroll: (id, amount, method) => set((state) => ({
-    payroll: state.payroll.map((item) => {
-      if (item.id !== id) return item;
-      const paidAmount = Math.min(item.netPayable, item.paidAmount + amount);
-      const payment = { id: `payment-${Date.now()}`, amount, date: todayKey(), method, transactionId: `ATT-${Date.now().toString().slice(-8)}` };
-      return {
-        ...item,
-        paidAmount,
-        status: paidAmount >= item.netPayable ? 'paid' : 'partial',
-        paymentDate: todayKey(),
-        paymentMethod: method,
-        transactionId: payment.transactionId,
-        paymentHistory: [...(item.paymentHistory ?? []), payment],
-      };
-    }),
-  })),
 }), {
   name: 'attan-hrms',
   storage: createJSONStorage(() => hrmsStorage),
